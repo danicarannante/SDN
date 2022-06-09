@@ -1,0 +1,230 @@
+from multiprocessing import connection
+import tweepy
+import csv
+from sdn_game import *
+from datetime import date
+
+def main():
+    data = get_response_json(url)
+    public_tweets = api.home_timeline()
+    final = []
+    p = []
+    player_keywords = ['pts', 'assists', 'ast', 'threes', 'asts', 'rebounds', 'reb', 'pra', 'rebs', 'rbs',
+        'passing tds', "bb's", "k's", 'outs', 'ks', 'rbis', 'rbi', 'runs', 'saves', 'walks', 'inning',
+        'innings', 'saves', 'home runs',
+        'passing touchdowns', 'double double', 'doubledouble', "double-double", 'points', 'first basket',
+        'double double', 'points scored']
+    game_keywords = ['nrfi','sgp']
+    platforms = ['draftkings']
+
+
+    for tweet in public_tweets:
+
+        if "https" in tweet.text:
+            link = tweet.text[tweet.text.find("https") - 1:]
+            # print(f"link: {link}")
+            tweet.text = tweet.text[:tweet.text.find("https")]
+
+        created = str(tweet.created_at)[:10]
+        split = tweet.text.splitlines()  # split the text into lines
+        pick = ""
+        units = ""
+        odds = ""
+        betType = ""
+        recapValue = 0
+
+        # overall units
+        for line in split:
+            spreadValue = ""
+            overUnder = ""
+            game_id = ""
+
+            split_words = line.split()
+            for word in split_words:
+                word = word.lower().strip(",").strip()
+
+                # units
+                try:
+                    word = word.strip("(").strip(")")
+                    if word.endswith('u') and (float(word[:len(word) - 1])):
+                        units = word
+                    if word.endswith('u') and ("-" in word or "+" in word) and (float(word[1:len(word) - 1])):
+                        units = word
+                except ValueError:
+                    continue
+
+        # iterate through the lines
+        for line in split:
+
+            split_words = line.split()  # split the line into words
+
+            # formatting
+            for word in split_words:
+                word = word.lower().strip(",").strip()
+                # check for recap or retweets
+                if ("rt" in word and len(word) == 2) or  "recap" in word or "results" in word or "retweet" in word or "overall" in word:
+                    recapValue = -1
+
+                # units
+                try:
+                    word = word.strip("(").strip(")")
+                    if word.endswith('u') and (float(word[:len(word) - 1])):
+                        units = word
+                    if word.endswith('u') and ("-" in word or "+" in word) and (float(word[1:len(word) - 1])):
+                        units = word
+                except ValueError:
+                    continue
+
+                if units in line and word in player_keywords:
+                    pick = line
+
+                # over/under
+                try:
+                    if word.startswith('o') and (float(word[1:])) or word == "over" or word.startswith('u') and \
+                            (float(word[1:])) or word == "under":
+                        pick = line
+                        overUnder = word
+                        betType = "total"
+
+                except ValueError:
+                    continue
+
+
+                # filter the numbers
+                if word.startswith("+") or word.startswith("-"):
+                    # spread bet
+                    try:
+                        if len(word[1:]) < 3 and float(word[1:]):
+                            spreadValue = word
+                            betType = "spread"
+                            pick = line
+                        elif len(word[1:]) <= 3 and "." in word:
+                            spreadValue = word
+                            betType = "spread"
+                            pick = line
+                        # odds
+                        if len(word) == 5 and float(word[1:4]):  # end of tweet
+                            odds = word[:4]
+                            pick = line
+                        if len(word[1:]) >= 3 and float(word[1:]) and "." not in word:
+                            odds = word
+                            pick = line
+                    except ValueError:
+                        continue
+
+                    # spread value for player props
+                    if word.endswith("+") or word.endswith("-"):
+                        spreadValue = word
+                        pick = line
+
+                # spread values without a + or -
+                try:
+                    if "." in word and float(word):
+                        spreadValue = word
+                        betType = "spread"
+                        pick = line
+                except ValueError:
+                    continue
+
+                # player props
+                if word in player_keywords:
+                    betType = "player prop"
+                if word in game_keywords:
+                    pick = line
+                    betType = "game prop"
+
+
+            # bet types
+            if "money line" in line.lower() or "moneyline" in line.lower() or "ml" in line.lower():
+                betType = "money line"
+                if odds != "":
+                    pick = line
+            if "game prop" in line.lower() or "gameprop" in line.lower():
+                betType = "game prop"
+            if "player prop" in line.lower() or "playerprop" in line.lower():
+                betType = "player prop"
+            if "parlay" in tweet.text.lower():
+                betType = "parlay"
+
+            if pick == "" and units in line:
+                pick == line
+            # total
+            if odds != "" and spreadValue == "" and betType == "":
+                betType = "total"
+
+            # get rid of emojis/ extra words
+            for letter in pick:
+                if ord(letter) > 128 or letter == '@':
+                    pick = pick.replace(letter, "").strip()
+
+            pick = pick.replace(pick[pick.find("(") - 1:pick.find(")") + 1], "")
+            pick = pick.replace(odds, "").replace(units, "").replace("- ", "").replace(")", "").replace("(", "").strip()
+
+            # check for bad keywords/ sports betting platforms for promo tweets
+            for i in platforms:
+                if i in pick.lower():
+                    pick = ""
+
+
+            if betType == "total" and any(x.isdigit() for x in pick) == False and "https" not in pick:
+                pick += link
+                betType = "player/game prop"
+
+            
+            today = date.today().strftime("%d %b %Y")
+
+            # game id
+            for entry in data['data']:
+
+                if (entry['date'][5:16] == today):
+                    team_split = entry['a_team'].replace(',','').lower().split() + entry['h_team'].replace(',','').lower().split()
+                    for i in team_split:
+                        if i in pick:
+                            game_id = entry['gid']
+                    
+
+            # read picks in the file
+            with open('test.csv', 'r', encoding='utf-8') as f:
+                csv_dict_reader = csv.DictReader(f)
+                for row in csv_dict_reader:
+                    p.append((row['pick'], row['date'], row["units"], row["odds"]))
+
+            for entry in final:
+                p.append((entry['pick'], entry["date"], entry["units"], entry["odds"]))
+            
+
+            if (pick, created, units, odds) not in p and betType != "" and pick != "" and ( units != "" or odds != "") and recapValue != -1:
+            
+                final.append({'username': tweet.user.screen_name, 'type': betType, 'date': created, 
+                              'units': units, 'odds': odds, 'pick': pick, 'gid' : game_id })
+
+        with open('tweets.txt', 'a', encoding='utf-8') as file:
+            fieldnames = ['username', 'tweet', 'date']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            temp_dict = {'username':tweet.user.screen_name,'tweet':tweet.text,'date':created + '\n'}
+            writer.writerow(temp_dict)
+             
+        print(tweet.text)
+        print("---------------------------------------------------------------------------------- ")
+
+    
+    
+    with open('test.csv', 'a', encoding='utf-8') as f:
+        fieldnames = ['username', 'type', 'date', 'units', 'odds', 'pick','gid']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for entry in final:
+            writer.writerow(entry)
+
+
+if __name__ == "__main__":
+    api_key = 'Xg8vDxvrsSXhTl0lBYszpdOv6'
+    api_key_secret = 'pu8nY8rxIlI5FLya9kfVH1vPk9NINGNKfMjobsI99LJbzoaajj'
+
+    access_token = '1496858773784248328-xeFAELHULwnuKFzZXrDW4pYUTwQavC'
+    access_token_secret = 'pwDyFqYmzwmMDeGyVXb4Rza06aP4Kcvjy041DueasS4ih'
+
+    auth = tweepy.OAuth1UserHandler(api_key, api_key_secret, access_token, access_token_secret)
+    api = tweepy.API(auth)
+    main()
+
